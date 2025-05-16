@@ -151,15 +151,15 @@ func (c *Protection) Handler(h http.Handler) http.Handler {
 	})
 }
 
-// HandlerWithError returns a handler that applies cross-origin checks
+// HandlerWithFailHandler returns a handler that applies cross-origin checks
 // before invoking the handler h.
 //
-// If a request fails cross-origin checks, the request is handled with the
-// given error handler.
-func (c *Protection) HandlerWithError(h http.Handler, errHandler http.Handler) http.Handler {
+// If a request fails cross-origin checks, the request is handled with the given
+// failure handler.
+func (c *Protection) HandlerWithFailHandler(h http.Handler, fail http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := c.Check(r); err != nil {
-			errHandler.ServeHTTP(w, r)
+			fail.ServeHTTP(w, r)
 			return
 		}
 		h.ServeHTTP(w, r)

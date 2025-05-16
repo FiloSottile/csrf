@@ -192,7 +192,7 @@ func TestHandlerWithError(t *testing.T) {
 		io.WriteString(w, "custom error")
 	})
 
-	handler := protection.HandlerWithError(okHandler, customErrHandler)
+	handler := protection.HandlerWithFailHandler(okHandler, customErrHandler)
 
 	req := httptestNewRequest("POST", "https://example.com/")
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
