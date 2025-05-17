@@ -207,6 +207,15 @@ func TestHandlerWithError(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "custom error") {
 		t.Errorf("expected custom error message, got: %q", w.Body.String())
 	}
+
+	req = httptestNewRequest("GET", "https://example.com/")
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("got status %d, want %d", w.Code, http.StatusOK)
+	}
 }
 
 func TestAddTrustedOriginErrors(t *testing.T) {
@@ -236,6 +245,96 @@ func TestAddTrustedOriginErrors(t *testing.T) {
 			err := protection.AddTrustedOrigin(tc.origin)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("AddTrustedOrigin(%q) error = %v, wantErr %v", tc.origin, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestAddingBypassesConcurrently(t *testing.T) {
+	protection := csrf.New()
+	handler := protection.Handler(okHandler)
+
+	req := httptestNewRequest("POST", "https://example.com/")
+	req.Header.Set("Origin", "https://concurrent.example")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("got status %d, want %d", w.Code, http.StatusForbidden)
+	}
+
+	start := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(start)
+		defer close(done)
+		for range 10 {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+		}
+	}()
+
+	// Add bypasses while the requests are in flight.
+	<-start
+	protection.AddTrustedOrigin("https://concurrent.example")
+	protection.AddUnsafeBypassPattern("/foo/")
+	<-done
+
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("After concurrent bypass addition, got status %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestServer(t *testing.T) {
+	protection := csrf.New()
+	protection.AddTrustedOrigin("https://trusted.example")
+	protection.AddUnsafeBypassPattern("/bypass/")
+	handler := protection.Handler(okHandler)
+
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	tests := []struct {
+		name           string
+		method         string
+		url            string
+		origin         string
+		secFetchSite   string
+		expectedStatus int
+	}{
+		{"cross-site", "POST", ts.URL, "https://attacker.example", "cross-site", http.StatusForbidden},
+		{"same-origin", "POST", ts.URL, "", "same-origin", http.StatusOK},
+		{"origin matches host", "POST", ts.URL, ts.URL, "", http.StatusOK},
+		{"trusted origin", "POST", ts.URL, "https://trusted.example", "", http.StatusOK},
+		{"untrusted origin", "POST", ts.URL, "https://attacker.example", "", http.StatusForbidden},
+		{"bypass path", "POST", ts.URL + "/bypass/", "https://attacker.example", "", http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, tc.url, nil)
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.secFetchSite != "" {
+				req.Header.Set("Sec-Fetch-Site", tc.secFetchSite)
+			}
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("Do: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.expectedStatus {
+				t.Errorf("got status %d, want %d", resp.StatusCode, tc.expectedStatus)
 			}
 		})
 	}
