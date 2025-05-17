@@ -112,8 +112,8 @@ func (c *Protection) Check(req *http.Request) error {
 	if c.isRequestExempt(req) {
 		return nil
 	}
-	return fmt.Errorf("cross-origin request detected, or browser is out of date: "+
-		"Sec-Fetch-Site is missing, and Origin %q does not match Host %q", origin, req.Host)
+	return errors.New("cross-origin request detected, and/or browser is out of date: " +
+		"Sec-Fetch-Site is missing, and Origin does not match Host")
 }
 
 // isRequestExempt checks the bypasses which require taking a lock, and should
