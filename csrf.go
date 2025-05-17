@@ -105,7 +105,12 @@ func (c *Protection) Check(req *http.Request) error {
 	}
 
 	if o, err := url.Parse(origin); err == nil && o.Host == req.Host {
-		// The Origin header matches the Host header.
+		// The Origin header matches the Host header. Note that the Host header
+		// doesn't include the scheme, so we don't know if this might be an
+		// HTTP→HTTPS cross-origin request. We fail open, since all modern
+		// browsers support Sec-Fetch-Site since 2023, and running an older
+		// browser makes a clear security trade-off already. Sites can mitigate
+		// this with HTTP Strict Transport Security (HSTS).
 		return nil
 	}
 
