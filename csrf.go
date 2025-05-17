@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sync"
+	"sync/atomic"
 )
 
 // Protection implements [Cross-Site Request Forgery (CSRF)] protections by
@@ -28,8 +28,8 @@ import (
 // [Cross-Site Request Forgery (CSRF)]: https://developer.mozilla.org/en-US/docs/Web/Security/Attacks/CSRF
 // [safe methods]: https://developer.mozilla.org/en-US/docs/Glossary/Safe/HTTP
 type Protection struct {
+	finalized atomic.Bool
 	bypass    *http.ServeMux
-	trustedMu sync.RWMutex
 	trusted   map[string]bool
 }
 
@@ -46,8 +46,13 @@ func New() *Protection {
 //
 // Origin header values are of the form "scheme://host[:port]".
 //
+// AddTrustedOrigin may only be called before the protection is used.
+//
 // [Origin]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin
 func (c *Protection) AddTrustedOrigin(origin string) error {
+	if c.finalized.Load() {
+		return errors.New("protection modified after use")
+	}
 	u, err := url.Parse(origin)
 	if err != nil {
 		return fmt.Errorf("invalid origin %q: %w", origin, err)
@@ -61,8 +66,6 @@ func (c *Protection) AddTrustedOrigin(origin string) error {
 	if u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("invalid origin %q: path, query, and fragment are not allowed", origin)
 	}
-	c.trustedMu.Lock()
-	defer c.trustedMu.Unlock()
 	c.trusted[origin] = true
 	return nil
 }
@@ -71,13 +74,20 @@ var noopHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) 
 
 // AddUnsafeBypassPattern permits all requests that match the given pattern.
 // The pattern syntax and precedence rules are the same as [ServeMux].
-func (c *Protection) AddUnsafeBypassPattern(pattern string) {
+//
+// AddUnsafeBypassPattern may only be called before the protection is used.
+func (c *Protection) AddUnsafeBypassPattern(pattern string) error {
+	if c.finalized.Load() {
+		return errors.New("protection modified after use")
+	}
 	c.bypass.Handle(pattern, noopHandler)
+	return nil
 }
 
 // Check applies cross-origin checks to a request.
 // It returns an error if the request should be rejected.
 func (c *Protection) Check(req *http.Request) error {
+	c.finalized.Store(true)
 	switch req.Method {
 	case "GET", "HEAD", "OPTIONS":
 		// Safe methods are always allowed.
@@ -112,8 +122,7 @@ func (c *Protection) Check(req *http.Request) error {
 	if c.isRequestExempt(req) {
 		return nil
 	}
-	return fmt.Errorf("cross-origin request detected, or browser is out of date: "+
-		"Sec-Fetch-Site is missing, and Origin %q does not match Host %q", origin, req.Host)
+	return errors.New("cross-origin request detected, or browser is out of date: Sec-Fetch-Site is missing and Origin does not match Host")
 }
 
 // isRequestExempt checks the bypasses which require taking a lock, and should
@@ -129,8 +138,6 @@ func (c *Protection) isRequestExempt(req *http.Request) bool {
 		return true
 	}
 
-	c.trustedMu.RLock()
-	defer c.trustedMu.RUnlock()
 	origin := req.Header.Get("Origin")
 	// The request matches a trusted origin.
 	return origin != "" && c.trusted[origin]
@@ -142,6 +149,7 @@ func (c *Protection) isRequestExempt(req *http.Request) bool {
 // If a request fails cross-origin checks, the request is rejected
 // with a 403 Forbidden status.
 func (c *Protection) Handler(h http.Handler) http.Handler {
+	c.finalized.Store(true)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := c.Check(r); err != nil {
 			http.Error(w, err.Error(), http.StatusForbidden)
@@ -157,6 +165,7 @@ func (c *Protection) Handler(h http.Handler) http.Handler {
 // If a request fails cross-origin checks, the request is handled with the given
 // failure handler.
 func (c *Protection) HandlerWithFailHandler(h http.Handler, fail http.Handler) http.Handler {
+	c.finalized.Store(true)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := c.Check(r); err != nil {
 			fail.ServeHTTP(w, r)

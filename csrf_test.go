@@ -207,6 +207,13 @@ func TestHandlerWithError(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "custom error") {
 		t.Errorf("expected custom error message, got: %q", w.Body.String())
 	}
+
+	req = httptestNewRequest("GET", "https://example.com/")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("got status %d, want %d", w.Code, http.StatusOK)
+	}
 }
 
 func TestAddTrustedOriginErrors(t *testing.T) {
@@ -238,5 +245,17 @@ func TestAddTrustedOriginErrors(t *testing.T) {
 				t.Errorf("AddTrustedOrigin(%q) error = %v, wantErr %v", tc.origin, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestCantModifyAfterUse(t *testing.T) {
+	protection := csrf.New()
+	req := httptestNewRequest("POST", "https://example.com/")
+	_ = protection.Check(req)
+	if err := protection.AddTrustedOrigin("https://example.com/"); err == nil {
+		t.Errorf("trusted origin added after use")
+	}
+	if err := protection.AddUnsafeBypassPattern("/api/"); err == nil {
+		t.Errorf("bypass add after use")
 	}
 }
