@@ -15,7 +15,7 @@
 // non-browser requests (those missing both Sec-Fetch-Site and Origin headers)
 // are allowed, since CSRF is fundamentally a browser issue.
 //
-// ## Same-origin vs tokens
+// # Same-origin vs tokens
 //
 // github.com/gorilla/csrf v1.7.2 and older allowed any request as long as it
 // had a valid token. v1.7.3 switched to additionally enforcing same-origin
@@ -29,7 +29,7 @@
 // same-origin HTTP requests without having to use [TrustedOrigins] or
 // [PlaintextHTTPRequest] (introduced in v1.7.3, and ignored by this package).
 //
-// ## API compatibility
+// # API compatibility
 //
 // All github.com/gorilla/csrf v1.7.3 exported APIs are also exported by this
 // package, for drop-in compatibility, but many are replaced with stubs.
@@ -135,13 +135,8 @@ type options struct {
 	FieldName      string
 }
 
-// ErrorHandler allows you to change the handler called when CSRF request
-// processing encounters an invalid token or request. A typical use would be to
-// provide a handler that returns a static HTML file with a HTTP 403 status. By
-// default a HTTP 403 status and a plain text CSRF failure reason are served.
-//
-// Note that a custom error handler can also access the csrf.FailureReason(r)
-// function to retrieve the CSRF validation reason from the request context.
+// ErrorHandler changes the handler that is called when a request is blocked.
+// By default, requests are rejected with a plain HTTP 403 Forbidden response.
 func ErrorHandler(h http.Handler) Option {
 	return func(o *options) {
 		o.ErrorHandler = h

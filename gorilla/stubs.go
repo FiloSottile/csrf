@@ -10,7 +10,7 @@ import (
 	"net/http"
 )
 
-// The following errors are exported for drop-in compatibility with the
+// These errors are exported for drop-in compatibility with the
 // github.com/gorilla/csrf API. They are not used in this package.
 var (
 	ErrNoReferer  = errors.New("referer not supplied")
@@ -44,10 +44,7 @@ func PlaintextHTTPRequest(r *http.Request) *http.Request {
 }
 
 // TemplateTag is a stub, exported for drop-in compatibility with the
-// github.com/gorilla/csrf API.
-//
-// Deprecated: all uses of TemplateTag can be removed. The system in this
-// package does not rely on tokens and doesn't require HTML tags.
+// github.com/gorilla/csrf API. It is not used by this package.
 var TemplateTag = "csrfField"
 
 // Token is a stub, exported for drop-in compatibility with the
