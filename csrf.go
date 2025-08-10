@@ -1,6 +1,9 @@
 // Package csrf implements protections against Cross-Site Request Forgery (CSRF)
-// equivalent to those provided by [net/http.CrossOriginProtection], introduced
-// in Go 1.25.
+// equivalent to those provided by [http.CrossOriginProtection], introduced in
+// Go 1.25.
+//
+// The gorilla subpackage implements a drop-in replacement for the
+// github.com/gorilla/csrf package.
 package csrf
 
 import (
