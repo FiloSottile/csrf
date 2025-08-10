@@ -1,3 +1,6 @@
+// Package csrf implements protections against Cross-Site Request Forgery (CSRF)
+// equivalent to those provided by [net/http.CrossOriginProtection], introduced
+// in Go 1.25.
 package csrf
 
 import (
@@ -7,44 +10,48 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 )
 
-// Protection implements [Cross-Site Request Forgery (CSRF)] protections by
-// rejecting non-safe browser requests initiated from a different origin.
+// Protection implements protections against [Cross-Site Request
+// Forgery (CSRF)] by rejecting non-safe cross-origin browser requests.
 //
-// Cross-origin requests are detected with the [Sec-Fetch-Site] header,
-// available in all browsers since 2023, or by comparing the hostname of the
-// [Origin] header with the Host header.
+// Cross-origin requests are currently detected with the [Sec-Fetch-Site]
+// header, available in all browsers since 2023, or by comparing the hostname of
+// the [Origin] header with the Host header.
 //
 // The GET, HEAD, and OPTIONS methods are [safe methods] and are always allowed.
 // It's important that applications do not perform any state changing actions
 // due to requests with safe methods.
 //
-// Requests without Sec-Fetch-Site or Origin headers are assumed to be either
-// same-origin or non-browser requests, and are allowed.
+// Requests without Sec-Fetch-Site or Origin headers are currently assumed to be
+// either same-origin or non-browser requests, and are allowed.
+//
+// The zero value of Protection is valid and has no trusted origins
+// or bypass patterns.
 //
 // [Sec-Fetch-Site]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Sec-Fetch-Site
 // [Origin]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin
 // [Cross-Site Request Forgery (CSRF)]: https://developer.mozilla.org/en-US/docs/Web/Security/Attacks/CSRF
 // [safe methods]: https://developer.mozilla.org/en-US/docs/Glossary/Safe/HTTP
 type Protection struct {
-	bypass    *http.ServeMux
+	bypass    atomic.Pointer[http.ServeMux]
 	trustedMu sync.RWMutex
 	trusted   map[string]bool
 }
 
 // New returns a new [Protection] value.
 func New() *Protection {
-	return &Protection{
-		bypass:  http.NewServeMux(),
-		trusted: make(map[string]bool),
-	}
+	return &Protection{}
 }
 
 // AddTrustedOrigin allows all requests with an [Origin] header
 // which exactly matches the given value.
 //
 // Origin header values are of the form "scheme://host[:port]".
+//
+// AddTrustedOrigin can be called concurrently with other methods
+// or request handling, and applies to future requests.
 //
 // [Origin]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin
 func (c *Protection) AddTrustedOrigin(origin string) error {
@@ -63,6 +70,9 @@ func (c *Protection) AddTrustedOrigin(origin string) error {
 	}
 	c.trustedMu.Lock()
 	defer c.trustedMu.Unlock()
+	if c.trusted == nil {
+		c.trusted = make(map[string]bool)
+	}
 	c.trusted[origin] = true
 	return nil
 }
@@ -71,8 +81,25 @@ var noopHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) 
 
 // AddUnsafeBypassPattern permits all requests that match the given pattern.
 // The pattern syntax and precedence rules are the same as [ServeMux].
+//
+// AddUnsafeBypassPattern can be called concurrently with other methods
+// or request handling, and applies to future requests.
 func (c *Protection) AddUnsafeBypassPattern(pattern string) {
-	c.bypass.Handle(pattern, noopHandler)
+	var bypass *http.ServeMux
+
+	// Lazily initialize c.bypass
+	for {
+		bypass = c.bypass.Load()
+		if bypass != nil {
+			break
+		}
+		bypass = http.NewServeMux()
+		if c.bypass.CompareAndSwap(nil, bypass) {
+			break
+		}
+	}
+
+	bypass.Handle(pattern, noopHandler)
 }
 
 // Check applies cross-origin checks to a request.
@@ -94,7 +121,7 @@ func (c *Protection) Check(req *http.Request) error {
 		if c.isRequestExempt(req) {
 			return nil
 		}
-		return errors.New("cross-origin request detected from Sec-Fetch-Site header")
+		return errCrossOriginRequest
 	}
 
 	origin := req.Header.Get("Origin")
@@ -117,9 +144,14 @@ func (c *Protection) Check(req *http.Request) error {
 	if c.isRequestExempt(req) {
 		return nil
 	}
-	return errors.New("cross-origin request detected, and/or browser is out of date: " +
-		"Sec-Fetch-Site is missing, and Origin does not match Host")
+	return errCrossOriginRequestFromOldBrowser
 }
+
+var (
+	errCrossOriginRequest               = errors.New("cross-origin request detected from Sec-Fetch-Site header")
+	errCrossOriginRequestFromOldBrowser = errors.New("cross-origin request detected, and/or browser is out of date: " +
+		"Sec-Fetch-Site is missing, and Origin does not match Host")
+)
 
 // isRequestExempt checks the bypasses which require taking a lock, and should
 // be deferred until the last moment.
@@ -129,9 +161,11 @@ func (c *Protection) isRequestExempt(req *http.Request) bool {
 		return true
 	}
 
-	if _, pattern := c.bypass.Handler(req); pattern != "" {
-		// The request matches a bypass pattern.
-		return true
+	if bypass := c.bypass.Load(); bypass != nil {
+		if _, pattern := bypass.Handler(req); pattern != "" {
+			// The request matches a bypass pattern.
+			return true
+		}
 	}
 
 	c.trustedMu.RLock()
